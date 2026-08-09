@@ -32,7 +32,7 @@ if not HF_TOKEN:
 # انتهای نام مدل باشد وگرنه خطای model_not_supported می‌گیری.
 # =========================================================
 
-MODEL = "dphn/Dolphin-Mistral-24B-Venice-Edition:featherless-ai"
+MODEL = "huihui-ai/Huihui-Qwen3.5-27B-abliterated:featherless-ai"
 
 HF_URL = "https://router.huggingface.co/v1/chat/completions"
 
