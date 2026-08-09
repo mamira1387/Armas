@@ -304,21 +304,20 @@ def home():
 # Vercel Webhook
 #
 # مهم:
-# چون فایل:
+# چون فایل api/webhook.py است، Vercel وقتی از سیستم
+# روتینگ فایل‌محور (بدون vercel.json سفارشی) استفاده کند،
+# مسیر کامل درخواست یعنی "/api/webhook" را مستقیماً به
+# همین اپ Flask پاس می‌دهد (نه فقط "/").
 #
-# api/webhook.py
-#
-# است، endpoint اصلی Vercel:
-#
-# /api/webhook
-#
-# است.
-#
-# بنابراین route داخلی Flask را "/" قرار داده‌ایم.
+# به همین دلیل هر سه مسیر "/", "/webhook" و "/api/webhook"
+# را روی یک تابع واحد ثبت می‌کنیم تا مهم نباشد Vercel چه
+# مسیری را فوروارد می‌کند - همیشه پاسخ درست بگیریم.
 # =========================================================
 
 @app.post("/")
-def webhook_root():
+@app.post("/webhook")
+@app.post("/api/webhook")
+def webhook_handler():
     try:
         data = request.get_json(
             force=True,
@@ -352,14 +351,3 @@ def webhook_root():
                 "error": str(e),
             }
         ), 500
-
-
-# =========================================================
-# Optional direct /webhook route
-#
-# برای تست مستقیم Flask نگه داشته شده.
-# =========================================================
-
-@app.post("/webhook")
-def webhook_direct():
-    return webhook_root()
