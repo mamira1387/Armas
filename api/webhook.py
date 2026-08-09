@@ -1,27 +1,44 @@
 import os
-import asyncio
 import requests
-
 from flask import Flask, request, jsonify
 
-from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+
+# =========================================================
+# Flask / Vercel
+# =========================================================
 
 app = Flask(__name__)
 
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-HF_TOKEN = os.environ["HF_TOKEN"]
+
+# =========================================================
+# Environment Variables
+# =========================================================
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+HF_TOKEN = os.environ.get("HF_TOKEN")
+
+if not TELEGRAM_TOKEN:
+    print("WARNING: TELEGRAM_TOKEN is not set", flush=True)
+
+if not HF_TOKEN:
+    print("WARNING: HF_TOKEN is not set", flush=True)
+
+
+# =========================================================
+# Hugging Face
+# =========================================================
 
 MODEL = "dphn/Dolphin3.0-R1-Mistral-24B:featherless-ai"
+
 HF_URL = "https://router.huggingface.co/v1/chat/completions"
 
+
+# =========================================================
+# Memory
+# =========================================================
+
 histories = {}
+
 
 SYSTEM_PROMPT = """
 You are Dolphin, a conversational AI assistant.
@@ -30,7 +47,14 @@ Keep the conversation consistent and engaging.
 """
 
 
+# =========================================================
+# Dolphin / Hugging Face
+# =========================================================
+
 def ask_dolphin(messages):
+    if not HF_TOKEN:
+        raise Exception("HF_TOKEN is not configured")
+
     response = requests.post(
         HF_URL,
         headers={
@@ -49,48 +73,171 @@ def ask_dolphin(messages):
 
     if response.status_code != 200:
         raise Exception(
-            f"HF {response.status_code}: {response.text}"
+            f"HF {response.status_code}: {response.text[:2000]}"
         )
 
     data = response.json()
 
-    return data["choices"][0]["message"]["content"]
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise Exception(
+            "Invalid Hugging Face response: "
+            + str(data)[:2000]
+        )
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🐬 سلام!\n\n"
-        "Dolphin آماده است.\n"
-        "پیامت رو بفرست."
+# =========================================================
+# Telegram API
+# =========================================================
+
+def telegram_api(method, payload=None):
+    if not TELEGRAM_TOKEN:
+        raise Exception("TELEGRAM_TOKEN is not configured")
+
+    url = (
+        f"https://api.telegram.org/"
+        f"bot{TELEGRAM_TOKEN}/{method}"
     )
 
-
-async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-
-    histories.pop(user_id, None)
-
-    await update.message.reply_text(
-        "🧹 حافظه پاک شد."
+    response = requests.post(
+        url,
+        json=payload or {},
+        timeout=30,
     )
 
+    if response.status_code != 200:
+        raise Exception(
+            f"Telegram HTTP {response.status_code}: "
+            f"{response.text[:2000]}"
+        )
 
-async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text
+    data = response.json()
+
+    if not data.get("ok"):
+        raise Exception(
+            "Telegram API error: "
+            + str(data)[:2000]
+        )
+
+    return data
+
+
+def send_message(chat_id, text):
+    # Telegram پیام‌های خیلی طولانی را قبول نمی‌کند.
+    # برای اطمینان، متن را تکه‌تکه می‌کنیم.
+
+    max_length = 4000
+
+    if not text:
+        text = "❌ پاسخ خالی دریافت شد."
+
+    chunks = [
+        text[i:i + max_length]
+        for i in range(0, len(text), max_length)
+    ]
+
+    for chunk in chunks:
+        telegram_api(
+            "sendMessage",
+            {
+                "chat_id": chat_id,
+                "text": chunk,
+            }
+        )
+
+
+def send_typing(chat_id):
+    try:
+        telegram_api(
+            "sendChatAction",
+            {
+                "chat_id": chat_id,
+                "action": "typing",
+            }
+        )
+    except Exception as e:
+        print(
+            "Typing action error:",
+            repr(e),
+            flush=True
+        )
+
+
+# =========================================================
+# Telegram Update
+# =========================================================
+
+def process_update(data):
+    message = data.get("message")
+
+    if not message:
+        return
+
+    chat = message.get("chat", {})
+    user = message.get("from", {})
+
+    chat_id = chat.get("id")
+    user_id = user.get("id")
+
+    if chat_id is None or user_id is None:
+        return
+
+    text = message.get("text")
+
+    if not text:
+        return
+
+    text = text.strip()
+
+    # =====================================================
+    # /start
+    # =====================================================
+
+    if text.startswith("/start"):
+        send_message(
+            chat_id,
+            "🐬 سلام!\n\n"
+            "Dolphin آماده است.\n"
+            "پیامت رو بفرست."
+        )
+        return
+
+    # =====================================================
+    # /reset
+    # =====================================================
+
+    if text.startswith("/reset"):
+        histories.pop(user_id, None)
+
+        send_message(
+            chat_id,
+            "🧹 حافظه پاک شد."
+        )
+        return
+
+    # =====================================================
+    # Create History
+    # =====================================================
 
     if user_id not in histories:
         histories[user_id] = [
             {
                 "role": "system",
-                "content": SYSTEM_PROMPT
+                "content": SYSTEM_PROMPT,
             }
         ]
 
-    histories[user_id].append({
-        "role": "user",
-        "content": text
-    })
+    histories[user_id].append(
+        {
+            "role": "user",
+            "content": text,
+        }
+    )
+
+    # =====================================================
+    # Limit History
+    # =====================================================
 
     if len(histories[user_id]) > 21:
         histories[user_id] = (
@@ -98,57 +245,85 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + histories[user_id][-20:]
         )
 
+    # =====================================================
+    # Ask Dolphin
+    # =====================================================
+
     try:
-        await update.message.chat.send_action("typing")
+        send_typing(chat_id)
 
-        answer = ask_dolphin(histories[user_id])
+        answer = ask_dolphin(
+            histories[user_id]
+        )
 
-        histories[user_id].append({
-            "role": "assistant",
-            "content": answer
-        })
+        if not answer:
+            answer = "❌ Dolphin پاسخی برنگرداند."
 
-        await update.message.reply_text(answer)
+        histories[user_id].append(
+            {
+                "role": "assistant",
+                "content": answer,
+            }
+        )
+
+        send_message(
+            chat_id,
+            answer
+        )
 
     except Exception as e:
-        print("DOLPHIN ERROR:", repr(e), flush=True)
+        print(
+            "DOLPHIN ERROR:",
+            repr(e),
+            flush=True
+        )
 
-        await update.message.reply_text(
-            "❌ خطا:\n" + str(e)[:1000]
+        send_message(
+            chat_id,
+            "❌ خطا در پردازش پیام:\n\n"
+            + str(e)[:1500]
         )
 
 
-telegram_app = (
-    Application.builder()
-    .token(TELEGRAM_TOKEN)
-    .build()
-)
-
-telegram_app.add_handler(
-    CommandHandler("start", start)
-)
-
-telegram_app.add_handler(
-    CommandHandler("reset", reset)
-)
-
-telegram_app.add_handler(
-    MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        chat
-    )
-)
-
+# =========================================================
+# Health Check
+# =========================================================
 
 @app.get("/")
 def home():
-    return "🐬 Dolphin Telegram Bot is online!"
+    return jsonify(
+        {
+            "ok": True,
+            "service": "Dolphin Telegram Bot",
+            "status": "online",
+        }
+    )
 
 
-@app.post("/webhook")
-def webhook():
+# =========================================================
+# Vercel Webhook
+#
+# مهم:
+# چون فایل:
+#
+# api/webhook.py
+#
+# است، endpoint اصلی Vercel:
+#
+# /api/webhook
+#
+# است.
+#
+# بنابراین route داخلی Flask را "/" قرار داده‌ایم.
+# =========================================================
+
+@app.post("/")
+def webhook_root():
     try:
-        data = request.get_json(force=True)
+        data = request.get_json(
+            force=True,
+            silent=False
+        )
 
         print(
             "🔥 TELEGRAM UPDATE:",
@@ -156,19 +331,13 @@ def webhook():
             flush=True
         )
 
-        update = Update.de_json(
-            data,
-            telegram_app.bot
-        )
+        process_update(data)
 
-        # اجرای async بدون async view در Flask
-        asyncio.run(
-            telegram_app.process_update(update)
-        )
-
-        return jsonify({
-            "ok": True
-        })
+        return jsonify(
+            {
+                "ok": True
+            }
+        ), 200
 
     except Exception as e:
         print(
@@ -177,7 +346,20 @@ def webhook():
             flush=True
         )
 
-        return jsonify({
-            "ok": False,
-            "error": str(e)
-        }), 500
+        return jsonify(
+            {
+                "ok": False,
+                "error": str(e),
+            }
+        ), 500
+
+
+# =========================================================
+# Optional direct /webhook route
+#
+# برای تست مستقیم Flask نگه داشته شده.
+# =========================================================
+
+@app.post("/webhook")
+def webhook_direct():
+    return webhook_root()
