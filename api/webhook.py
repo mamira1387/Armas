@@ -28,7 +28,7 @@ if not HF_TOKEN:
 # Hugging Face
 # =========================================================
 
-MODEL = "dphn/Dolphin3.0-R1-Mistral-24B:featherless-ai"
+MODEL = "dphn/Dolphin-Mistral-24B-Venice-Edition"
 
 HF_URL = "https://router.huggingface.co/v1/chat/completions"
 
