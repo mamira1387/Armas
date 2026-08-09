@@ -1,0 +1,173 @@
+import os
+import requests
+
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+
+TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
+HF_TOKEN = os.environ["HF_TOKEN"]
+
+MODEL = "dphn/Dolphin3.0-R1-Mistral-24B:featherless-ai"
+HF_URL = "https://router.huggingface.co/v1/chat/completions"
+
+histories = {}
+
+SYSTEM_PROMPT = """
+You are Dolphin, a conversational AI assistant.
+You are good at natural conversation and roleplay.
+Keep the conversation consistent and engaging.
+"""
+
+
+def ask_dolphin(messages):
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    data = {
+        "model": MODEL,
+        "messages": messages,
+        "temperature": 0.8,
+        "max_tokens": 700,
+        "stream": False,
+    }
+
+    response = requests.post(
+        HF_URL,
+        headers=headers,
+        json=data,
+        timeout=120,
+    )
+
+    if response.status_code != 200:
+        raise Exception(
+            f"HF HTTP {response.status_code}: {response.text}"
+        )
+
+    result = response.json()
+
+    return result["choices"][0]["message"]["content"]
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🐬 سلام!\n\n"
+        "من به Dolphin متصل هستم.\n"
+        "پیامت رو بفرست."
+    )
+
+
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    histories.pop(user_id, None)
+
+    await update.message.reply_text(
+        "🧹 حافظه مکالمه پاک شد."
+    )
+
+
+async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text
+
+    if user_id not in histories:
+        histories[user_id] = [
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT,
+            }
+        ]
+
+    histories[user_id].append({
+        "role": "user",
+        "content": text,
+    })
+
+    if len(histories[user_id]) > 21:
+        histories[user_id] = (
+            [histories[user_id][0]]
+            + histories[user_id][-20:]
+        )
+
+    try:
+        await update.message.chat.send_action("typing")
+
+        answer = ask_dolphin(histories[user_id])
+
+        histories[user_id].append({
+            "role": "assistant",
+            "content": answer,
+        })
+
+        await update.message.reply_text(answer)
+
+    except Exception as e:
+        print("ERROR:", repr(e))
+
+        await update.message.reply_text(
+            "❌ خطا در اتصال به Dolphin:\n\n"
+            + str(e)[:1000]
+        )
+
+
+application = (
+    Application.builder()
+    .token(TELEGRAM_TOKEN)
+    .build()
+)
+
+application.add_handler(
+    CommandHandler("start", start)
+)
+
+application.add_handler(
+    CommandHandler("reset", reset)
+)
+
+application.add_handler(
+    MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        chat
+    )
+)
+
+
+async def handler(request):
+    if request.method != "POST":
+        return {
+            "statusCode": 200,
+            "body": "Dolphin Telegram Bot is running!"
+        }
+
+    try:
+        body = await request.json()
+
+        update = Update.de_json(
+            body,
+            application.bot
+        )
+
+        await application.initialize()
+        await application.process_update(update)
+        await application.shutdown()
+
+        return {
+            "statusCode": 200,
+            "body": "OK"
+        }
+
+    except Exception as e:
+        print("WEBHOOK ERROR:", repr(e))
+
+        return {
+            "statusCode": 500,
+            "body": "ERROR"
+        }
