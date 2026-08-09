@@ -1,2 +1,12 @@
+[project]
+name = "armas"
+version = "1.0.0"
+description = "Dolphin Telegram Bot"
+requires-python = ">=3.10"
+dependencies = [
+    "flask",
+    "requests"
+]
+
 [tool.vercel]
 entrypoint = "api.webhook:app"
