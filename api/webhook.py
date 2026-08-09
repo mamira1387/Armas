@@ -83,8 +83,17 @@ def ask_dolphin(messages):
             "model": MODEL,
             "messages": messages,
             "temperature": 0.7,
-            "max_tokens": 700,
+            "max_tokens": 1200,
             "stream": False,
+            # =================================================
+            # مدل‌های خانواده Qwen3.5 به‌طور پیش‌فرض حالت
+            # "thinking" دارند و بخش زیادی از توکن‌ها را صرف
+            # فکر کردن داخلی (reasoning_content) می‌کنند.
+            # با خاموش کردن آن، پاسخ مستقیم در content برمی‌گردد.
+            # =================================================
+            "chat_template_kwargs": {
+                "enable_thinking": False
+            },
         },
         timeout=120,
     )
@@ -97,12 +106,28 @@ def ask_dolphin(messages):
     data = response.json()
 
     try:
-        return data["choices"][0]["message"]["content"]
+        message = data["choices"][0]["message"]
     except (KeyError, IndexError, TypeError):
         raise Exception(
             "Invalid Hugging Face response: "
             + str(data)[:2000]
         )
+
+    content = message.get("content")
+
+    # اگر با وجود خاموش بودن thinking، content هنوز خالی بود،
+    # به‌عنوان فallback از reasoning_content استفاده می‌کنیم تا
+    # کاربر پاسخ خالی نگیرد.
+    if not content:
+        content = message.get("reasoning_content")
+
+    if not content:
+        raise Exception(
+            "Empty content from model: "
+            + str(data)[:2000]
+        )
+
+    return content
 
 
 # =========================================================
