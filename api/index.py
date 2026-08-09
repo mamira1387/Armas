@@ -1,7 +1,9 @@
 import os
+import asyncio
 import requests
 
 from flask import Flask, request, jsonify
+
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -29,7 +31,6 @@ Keep the conversation consistent and engaging.
 
 
 def ask_dolphin(messages):
-
     response = requests.post(
         HF_URL,
         headers={
@@ -57,7 +58,6 @@ def ask_dolphin(messages):
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     await update.message.reply_text(
         "🐬 سلام!\n\n"
         "Dolphin آماده است.\n"
@@ -66,7 +66,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     user_id = update.effective_user.id
 
     histories.pop(user_id, None)
@@ -77,12 +76,10 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     user_id = update.effective_user.id
     text = update.message.text
 
     if user_id not in histories:
-
         histories[user_id] = [
             {
                 "role": "system",
@@ -96,19 +93,15 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     })
 
     if len(histories[user_id]) > 21:
-
         histories[user_id] = (
             [histories[user_id][0]]
             + histories[user_id][-20:]
         )
 
     try:
-
         await update.message.chat.send_action("typing")
 
-        answer = ask_dolphin(
-            histories[user_id]
-        )
+        answer = ask_dolphin(histories[user_id])
 
         histories[user_id].append({
             "role": "assistant",
@@ -118,12 +111,10 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(answer)
 
     except Exception as e:
-
-        print("DOLPHIN ERROR:", repr(e))
+        print("DOLPHIN ERROR:", repr(e), flush=True)
 
         await update.message.reply_text(
-            "❌ خطا در Dolphin:\n\n"
-            + str(e)[:1000]
+            "❌ خطا:\n" + str(e)[:1000]
         )
 
 
@@ -151,37 +142,40 @@ telegram_app.add_handler(
 
 @app.get("/")
 def home():
+    return "🐬 Dolphin Telegram Bot is online!"
 
-    return "🐬 Bot is online"
 
-
-@app.post("/api/webhook")
-async def webhook():
-
+@app.post("/webhook")
+def webhook():
     try:
-
         data = request.get_json(force=True)
 
-        print("TELEGRAM UPDATE:", data)
+        print(
+            "🔥 TELEGRAM UPDATE:",
+            data,
+            flush=True
+        )
 
         update = Update.de_json(
             data,
             telegram_app.bot
         )
 
-        await telegram_app.initialize()
-
-        await telegram_app.process_update(update)
-
-        await telegram_app.shutdown()
+        # اجرای async بدون async view در Flask
+        asyncio.run(
+            telegram_app.process_update(update)
+        )
 
         return jsonify({
             "ok": True
         })
 
     except Exception as e:
-
-        print("WEBHOOK ERROR:", repr(e))
+        print(
+            "🔥 WEBHOOK ERROR:",
+            repr(e),
+            flush=True
+        )
 
         return jsonify({
             "ok": False,
