@@ -1,6 +1,7 @@
 import os
 import requests
 
+from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -9,6 +10,8 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+
+app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 HF_TOKEN = os.environ["HF_TOKEN"]
@@ -26,113 +29,119 @@ Keep the conversation consistent and engaging.
 
 
 def ask_dolphin(messages):
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": "application/json",
-    }
-
-    data = {
-        "model": MODEL,
-        "messages": messages,
-        "temperature": 0.8,
-        "max_tokens": 700,
-        "stream": False,
-    }
 
     response = requests.post(
         HF_URL,
-        headers=headers,
-        json=data,
+        headers={
+            "Authorization": f"Bearer {HF_TOKEN}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": MODEL,
+            "messages": messages,
+            "temperature": 0.8,
+            "max_tokens": 700,
+            "stream": False,
+        },
         timeout=120,
     )
 
     if response.status_code != 200:
         raise Exception(
-            f"HF HTTP {response.status_code}: {response.text}"
+            f"HF {response.status_code}: {response.text}"
         )
 
-    result = response.json()
+    data = response.json()
 
-    return result["choices"][0]["message"]["content"]
+    return data["choices"][0]["message"]["content"]
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     await update.message.reply_text(
         "🐬 سلام!\n\n"
-        "من به Dolphin متصل هستم.\n"
+        "Dolphin آماده است.\n"
         "پیامت رو بفرست."
     )
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     user_id = update.effective_user.id
 
     histories.pop(user_id, None)
 
     await update.message.reply_text(
-        "🧹 حافظه مکالمه پاک شد."
+        "🧹 حافظه پاک شد."
     )
 
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     user_id = update.effective_user.id
     text = update.message.text
 
     if user_id not in histories:
+
         histories[user_id] = [
             {
                 "role": "system",
-                "content": SYSTEM_PROMPT,
+                "content": SYSTEM_PROMPT
             }
         ]
 
     histories[user_id].append({
         "role": "user",
-        "content": text,
+        "content": text
     })
 
     if len(histories[user_id]) > 21:
+
         histories[user_id] = (
             [histories[user_id][0]]
             + histories[user_id][-20:]
         )
 
     try:
+
         await update.message.chat.send_action("typing")
 
-        answer = ask_dolphin(histories[user_id])
+        answer = ask_dolphin(
+            histories[user_id]
+        )
 
         histories[user_id].append({
             "role": "assistant",
-            "content": answer,
+            "content": answer
         })
 
         await update.message.reply_text(answer)
 
     except Exception as e:
-        print("ERROR:", repr(e))
+
+        print("DOLPHIN ERROR:", repr(e))
 
         await update.message.reply_text(
-            "❌ خطا در اتصال به Dolphin:\n\n"
+            "❌ خطا در Dolphin:\n\n"
             + str(e)[:1000]
         )
 
 
-application = (
+telegram_app = (
     Application.builder()
     .token(TELEGRAM_TOKEN)
     .build()
 )
 
-application.add_handler(
+telegram_app.add_handler(
     CommandHandler("start", start)
 )
 
-application.add_handler(
+telegram_app.add_handler(
     CommandHandler("reset", reset)
 )
 
-application.add_handler(
+telegram_app.add_handler(
     MessageHandler(
         filters.TEXT & ~filters.COMMAND,
         chat
@@ -140,34 +149,41 @@ application.add_handler(
 )
 
 
-async def handler(request):
-    if request.method != "POST":
-        return {
-            "statusCode": 200,
-            "body": "Dolphin Telegram Bot is running!"
-        }
+@app.get("/")
+def home():
+
+    return "🐬 Bot is online"
+
+
+@app.post("/api/webhook")
+async def webhook():
 
     try:
-        body = await request.json()
+
+        data = request.get_json(force=True)
+
+        print("TELEGRAM UPDATE:", data)
 
         update = Update.de_json(
-            body,
-            application.bot
+            data,
+            telegram_app.bot
         )
 
-        await application.initialize()
-        await application.process_update(update)
-        await application.shutdown()
+        await telegram_app.initialize()
 
-        return {
-            "statusCode": 200,
-            "body": "OK"
-        }
+        await telegram_app.process_update(update)
+
+        await telegram_app.shutdown()
+
+        return jsonify({
+            "ok": True
+        })
 
     except Exception as e:
+
         print("WEBHOOK ERROR:", repr(e))
 
-        return {
-            "statusCode": 500,
-            "body": "ERROR"
-        }
+        return jsonify({
+            "ok": False,
+            "error": str(e)
+        }), 500
